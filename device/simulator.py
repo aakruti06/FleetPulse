@@ -1,26 +1,29 @@
-import json, random, time
+import json, random, sys, time
 from pathlib import Path
 from awscrt import mqtt
 from awsiot import mqtt_connection_builder
 
 ENDPOINT = "a2v4tpht6mhubb-ats.iot.ap-south-1.amazonaws.com"
-DEVICE_ID = "demo-thing"
-TOPIC = "fleetpulse/device-001/telemetry"
 
-CERTS = Path(__file__).resolve().parent.parent / "certs"
+if len(sys.argv) != 2:
+    sys.exit("Usage: python3 device/simulator.py <device-name>")
+
+DEVICE_ID = sys.argv[1]
+TOPIC = f"fleetpulse/{DEVICE_ID}/telemetry"
+CERTS = Path(__file__).resolve().parent.parent / "certs" / DEVICE_ID
 
 conn = mqtt_connection_builder.mtls_from_path(
     endpoint=ENDPOINT,
-    cert_filepath=str(CERTS / "demo-certificate.pem.crt"),
-    pri_key_filepath=str(CERTS / "demo-private.pem.key"),
+    cert_filepath=str(CERTS / f"{DEVICE_ID}-certificate.pem.crt"),
+    pri_key_filepath=str(CERTS / f"{DEVICE_ID}-private.pem.key"),
     ca_filepath=str(CERTS / "AmazonRootCA1.pem"),
     client_id=DEVICE_ID,
     keep_alive_secs=30,
 )
 conn.connect().result()
-print("Connected")
+print(f"{DEVICE_ID} connected, publishing to {TOPIC}")
 
-for i in range(10):
+for i in range(30):
     payload = {
         "device_id": DEVICE_ID,
         "ts": int(time.time()),
