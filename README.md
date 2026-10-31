@@ -11,9 +11,9 @@ through GitHub Actions.
 
 ## Planned features
 - [x] Device simulator with X.509 authentication (MQTT)
-- [ ] Ingestion pipeline: IoT Core → Lambda/Firehose → S3, Timestream
-- [ ] Grafana dashboard and SNS alerts
-- [ ] Device shadow and fleet-status API
+- [x] Ingestion pipeline: IoT Core → Lambda/Firehose → S3, Timestream
+- [x] Grafana dashboard and SNS alerts
+- [x] Device shadow and fleet-status API
 - [ ] OTA updates with IoT Jobs
 - [ ] Terraform infrastructure and CI/CD
 
