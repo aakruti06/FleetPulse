@@ -29,7 +29,7 @@ flowchart TD
 
 ## Planned
 
-- [ ] Fleet-status API (API Gateway, Lambda, DynamoDB)
+- [x] Fleet-status API (API Gateway, Lambda, DynamoDB)
 - [ ] OTA updates with IoT Jobs
 - [ ] Infrastructure as code with Terraform
 - [ ] Docker fleet of simulated devices
