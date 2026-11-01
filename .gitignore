@@ -25,3 +25,4 @@ venv/
 *credentials*.csv
 *accessKeys*.csv
 *.zip
+.pytest_cache/
