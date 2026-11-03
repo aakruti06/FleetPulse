@@ -10,7 +10,7 @@ from pathlib import Path
 from awscrt import mqtt
 from awsiot import mqtt_connection_builder
 
-from ota import download, parse_package, verify_checksum
+from ota import download, load_state, parse_package, save_state, verify_checksum
 from telemetry import make_payload, valid_interval
 
 ENDPOINT = os.environ.get("FLEETPULSE_ENDPOINT")
@@ -26,8 +26,10 @@ SHADOW = f"$aws/things/{DEVICE_ID}/shadow"
 JOBS = f"$aws/things/{DEVICE_ID}/jobs"
 CERTS = Path(__file__).resolve().parent.parent / "certs" / DEVICE_ID
 
-interval = 2
-firmware_version = "1.0.0"
+STATE_FILE = Path.home() / ".fleetpulse" / f"{DEVICE_ID}.json"
+_saved = load_state(STATE_FILE)
+interval = _saved["interval_sec"] if valid_interval(_saved.get("interval_sec")) else 2
+firmware_version = _saved["firmware_version"] if isinstance(_saved.get("firmware_version"), str) else "1.0.0"
 connected = threading.Event()
 needs_setup = threading.Event()
 job_check = threading.Event()
@@ -152,6 +154,7 @@ def process_job(execution):
         package = parse_package(data)
         interval = package["default_interval_sec"]
         firmware_version = package["version"]
+        save_state(STATE_FILE, {"firmware_version": firmware_version, "interval_sec": interval})
         report_state(sync_desired=True)
         report_job(job_id, "SUCCEEDED", {"version": firmware_version})
         print(f"Job {job_id} SUCCEEDED: firmware {firmware_version}, interval {interval}s")

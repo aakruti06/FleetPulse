@@ -35,3 +35,20 @@ def download(url, timeout=15):
     if len(data) > MAX_PACKAGE_BYTES:
         raise ValueError("package too large")
     return data
+
+
+def load_state(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def save_state(path, state):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    tmp.replace(path)
