@@ -1,6 +1,7 @@
 import collections
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from awscrt import mqtt
 from awsiot import mqtt_connection_builder
 
+from ota import download, parse_package, verify_checksum
 from telemetry import make_payload, valid_interval
 
 ENDPOINT = os.environ.get("FLEETPULSE_ENDPOINT")
@@ -21,11 +23,15 @@ DEVICE_ID = sys.argv[1]
 COUNT = int(sys.argv[2]) if len(sys.argv) == 3 else 30
 TOPIC = f"fleetpulse/{DEVICE_ID}/telemetry"
 SHADOW = f"$aws/things/{DEVICE_ID}/shadow"
+JOBS = f"$aws/things/{DEVICE_ID}/jobs"
 CERTS = Path(__file__).resolve().parent.parent / "certs" / DEVICE_ID
 
 interval = 2
+firmware_version = "1.0.0"
 connected = threading.Event()
-needs_shadow_setup = threading.Event()
+needs_setup = threading.Event()
+job_check = threading.Event()
+job_queue = queue.Queue()
 buffer = collections.deque(maxlen=500)
 
 
@@ -36,7 +42,7 @@ def on_interrupted(connection, error, **kwargs):
 
 def on_resumed(connection, return_code, session_present, **kwargs):
     connected.set()
-    needs_shadow_setup.set()
+    needs_setup.set()
     print(f"Connection restored. {len(buffer)} buffered readings to send.")
 
 
@@ -57,11 +63,13 @@ connected.set()
 print(f"{DEVICE_ID} connected, publishing to {TOPIC}")
 
 
-def report_interval(wait=True):
-    msg = {"state": {"reported": {"interval_sec": interval}}}
+def report_state(wait=True, sync_desired=False):
+    state = {"reported": {"interval_sec": interval, "firmware_version": firmware_version}}
+    if sync_desired:
+        state["desired"] = {"interval_sec": interval}
     future, _ = conn.publish(
         topic=f"{SHADOW}/update",
-        payload=json.dumps(msg),
+        payload=json.dumps({"state": state}),
         qos=mqtt.QoS.AT_LEAST_ONCE,
     )
     if wait:
@@ -76,17 +84,94 @@ def on_delta(topic, payload, dup, qos, retain, **kwargs):
         print(f"Shadow update received: interval is now {interval}s")
     else:
         print(f"Shadow update ignored (invalid interval): {desired!r}")
-    report_interval(wait=False)
+    report_state(wait=False)
 
 
-def setup_shadow():
-    sub_future, _ = conn.subscribe(
-        topic=f"{SHADOW}/update/delta",
-        qos=mqtt.QoS.AT_LEAST_ONCE,
-        callback=on_delta,
+def on_job_notify(topic, payload, dup, qos, retain, **kwargs):
+    if json.loads(payload).get("execution"):
+        job_check.set()
+
+
+def on_job_accepted(topic, payload, dup, qos, retain, **kwargs):
+    execution = json.loads(payload).get("execution")
+    if execution:
+        job_queue.put(execution)
+
+
+def on_rejected(topic, payload, dup, qos, retain, **kwargs):
+    print(f"Request rejected on {topic}: {payload.decode()}")
+
+
+def subscribe(topic, callback):
+    future, _ = conn.subscribe(topic=topic, qos=mqtt.QoS.AT_LEAST_ONCE, callback=callback)
+    future.result(timeout=10)
+
+
+def setup_cloud():
+    subscribe(f"{SHADOW}/update/delta", on_delta)
+    subscribe(f"{JOBS}/notify-next", on_job_notify)
+    subscribe(f"{JOBS}/start-next/accepted", on_job_accepted)
+    subscribe(f"{JOBS}/start-next/rejected", on_rejected)
+    subscribe(f"{JOBS}/+/update/rejected", on_rejected)
+    report_state()
+    job_check.set()
+
+
+def request_job():
+    future, _ = conn.publish(
+        topic=f"{JOBS}/start-next", payload="{}", qos=mqtt.QoS.AT_LEAST_ONCE
     )
-    sub_future.result(timeout=10)
-    report_interval()
+    future.result(timeout=10)
+
+
+def report_job(job_id, status, details):
+    message = {
+        "status": status,
+        "statusDetails": {key: str(value) for key, value in details.items()},
+    }
+    future, _ = conn.publish(
+        topic=f"{JOBS}/{job_id}/update",
+        payload=json.dumps(message),
+        qos=mqtt.QoS.AT_LEAST_ONCE,
+    )
+    future.result(timeout=10)
+
+
+def process_job(execution):
+    global interval, firmware_version
+    job_id = execution["jobId"]
+    doc = execution.get("jobDocument") or {}
+    print(f"Job {job_id} received: {doc.get('operation')} {doc.get('version')}")
+    try:
+        report_job(job_id, "IN_PROGRESS", {"step": "downloading"})
+        if doc.get("operation") != "update":
+            raise ValueError(f"unsupported operation {doc.get('operation')!r}")
+        data = download(doc["url"])
+        if not verify_checksum(data, doc["sha256"]):
+            raise ValueError("checksum mismatch, update rejected")
+        package = parse_package(data)
+        interval = package["default_interval_sec"]
+        firmware_version = package["version"]
+        report_state(sync_desired=True)
+        report_job(job_id, "SUCCEEDED", {"version": firmware_version})
+        print(f"Job {job_id} SUCCEEDED: firmware {firmware_version}, interval {interval}s")
+    except Exception as err:
+        print(f"Job {job_id} FAILED: {err!r}")
+        try:
+            report_job(job_id, "FAILED", {"reason": str(err)[:200]})
+        except Exception as report_err:
+            print(f"Could not report the failure ({report_err!r})")
+
+
+def service_jobs():
+    if job_check.is_set():
+        job_check.clear()
+        try:
+            request_job()
+        except Exception as err:
+            print(f"Job request failed ({err!r})")
+    while not job_queue.empty():
+        process_job(job_queue.get())
 
 
 def flush_buffer():
@@ -105,22 +190,25 @@ def flush_buffer():
 
 
 try:
-    setup_shadow()
-    print(f"Shadow ready, reported interval {interval}s")
+    setup_cloud()
+    print(f"Shadow and jobs ready: interval {interval}s, firmware {firmware_version}")
 except Exception as err:
-    sys.exit(f"Shadow setup failed ({err!r}). Check that the newest policy version is Active.")
+    sys.exit(f"Setup failed ({err!r}). Check that the newest policy version is Active.")
 
 for i in range(COUNT):
     buffer.append(make_payload(DEVICE_ID, i))
-    if needs_shadow_setup.is_set():
-        needs_shadow_setup.clear()
+    if needs_setup.is_set():
+        needs_setup.clear()
         try:
-            setup_shadow()
+            setup_cloud()
         except Exception as err:
-            print(f"Shadow setup after reconnect failed ({err!r}); will retry")
-            needs_shadow_setup.set()
+            print(f"Setup after reconnect failed ({err!r}); will retry")
+            needs_setup.set()
     flush_buffer()
-    time.sleep(interval)
+    end = time.time() + interval
+    while time.time() < end:
+        service_jobs()
+        time.sleep(0.2)
 
 deadline = time.time() + 30
 while buffer and time.time() < deadline:

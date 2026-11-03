@@ -1,0 +1,1 @@
+{"operation":"update","version":"1.1.0","url":"${aws:iot:s3-presigned-url:https://s3.ap-south-1.amazonaws.com/fleetpulse-raw-fp-26/updates/fleetpulse-1.1.0.json}","sha256":"1165648c83206b6cd1c7797fb35361db3d8c49ef587ed4cb2c8273c2e34241a4"}
