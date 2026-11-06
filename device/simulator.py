@@ -21,7 +21,8 @@ if len(sys.argv) not in (2, 3):
 
 DEVICE_ID = sys.argv[1]
 COUNT = int(sys.argv[2]) if len(sys.argv) == 3 else 30
-TOPIC = f"fleetpulse/{DEVICE_ID}/telemetry"
+TOPIC_PREFIX = os.environ.get("FLEETPULSE_TOPIC_PREFIX", "fleetpulse")
+TOPIC = f"{TOPIC_PREFIX}/{DEVICE_ID}/telemetry"
 SHADOW = f"$aws/things/{DEVICE_ID}/shadow"
 JOBS = f"$aws/things/{DEVICE_ID}/jobs"
 CERTS = Path(__file__).resolve().parent.parent / "certs" / DEVICE_ID

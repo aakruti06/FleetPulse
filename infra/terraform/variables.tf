@@ -14,3 +14,15 @@ variable "bucket_suffix" {
   type        = string
   default     = "fp-26"
 }
+
+variable "device_ids" {
+  description = "Suffixes for the device names (prefix-device-<id>)"
+  type        = set(string)
+  default     = ["001", "002", "003"]
+}
+
+variable "topic_prefix" {
+  description = "MQTT topic prefix for this stack, separate from the hand-built stack"
+  type        = string
+  default     = "fleetpulse-tf"
+}
